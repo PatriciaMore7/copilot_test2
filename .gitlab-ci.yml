@@ -1,0 +1,125 @@
+variables:
+  NODE_ENV: 'production'
+  NODE_OPTIONS: '--max_old_space_size=4096'
+  DEVTOOL: 'source-map'
+  CI_CHECK_ACL: 'Y'
+  CMP_RELEASE_MODE: 'SUPERVISE'
+  LAST_COMMIT_FILE: .commit_for_last_run
+  CI_BUILD_DEST: "dist"
+  CI_X_DOCKER_ARCHS: "linux/amd64,linux/arm64"
+  CI_X_DOCKER_BASE_IMAGE: "harbor.tidu.io/tdio/fss-proxy:1.1.x"
+  CI_X_DOCKER_HUB: "harbor.tidu.io"
+  CI_X_DOCKER_IMAGE_NAME: "cmp/cmp-ui"
+  CI_X_DOCKER_MIRROR_OPTS: '-r steamer-9/cmp/cmp-ui:%{tag} --registry hub.tiduyun.com:5000'
+  CI_X_DIST_DIR: '/data/cmp-ui'
+
+cache:
+  paths:
+    - node_modules/
+    - yarn.lock
+    - $LAST_COMMIT_FILE
+
+stages:
+ - init 
+ - lint
+ - build
+ - deploy
+ - release
+
+init:
+  tags:
+    - cmp-web-cicd
+  script:
+    - LAST_BUILD_SHA=""
+    - export CI_COMMIT_SHA=${CI_COMMIT_SHA:-${CI_BUILD_REF}}
+    - if [ -f "$LAST_COMMIT_FILE" ]; then LAST_BUILD_SHA=$(head -n 1 "$LAST_COMMIT_FILE"); fi
+    - if [ -z "$LAST_BUILD_SHA" ]; then LAST_BUILD_SHA="$CI_COMMIT_SHA"; echo $CI_COMMIT_SHA > $LAST_COMMIT_FILE; fi
+    - export LAST_BUILD_SHA
+    - export CHANGED_FILES=$(git diff-tree --no-commit-id --diff-filter=ACMRTU -r $LAST_BUILD_SHA HEAD --name-only | egrep '.(jsx?|tsx?|vue)$')
+    - if [ "$CI_COMMIT_SHA" != "$LAST_BUILD_SHA" ]; then rm -f yarn.lock; fi
+    - yarn --production=false
+  stage: init
+  interruptible: true
+
+lint:
+  variables:
+    NODE_ENV: 'staging'
+  tags:
+    - cmp-web-cicd
+  script:
+    - if [ -n "$CHANGED_FILES" ]; then yarn lint $CHANGED_FILES; fi
+    - echo $CI_COMMIT_SHA > $LAST_COMMIT_FILE
+  stage: lint
+  only:
+    - branches
+  interruptible: true
+
+build:
+  variables:
+    CI_DEPLOY_PLUGINS: "rsync-dist,partial-sourcemap,docker"
+    CI_X_DOCKER_MIRROR: 'true'
+    CI_X_DIST_HOST_LIST: '$CI_HOST_DEVEL'
+    CI_X_DOCKER_PATCH_IMAGE: "harbor.tidu.io/cmp/cmp-ui-patches:2.6"
+  tags:
+    - cmp-web-cicd
+  script:
+    - yarn build
+    - cd ${CI_PROJECT_DIR}
+    - zip -r dist.zip dist/ # 压缩dist
+    - rm -rf ${CMP_UI_CATCH_PATH}dist.zip # 删除
+    - cp ${CI_PROJECT_DIR}/dist.zip ${CMP_UI_CATCH_PATH}
+    - echo $CI_COMMIT_SHA > $LAST_COMMIT_FILE
+  retry:
+    max: 2    
+  stage: build
+  interruptible: true
+  only:
+    - /^release.*$/  # release分支进行构建
+
+deployDev:
+  tags:
+    - cmp-web-cicd
+  script:
+    - docker exec cmp-ui rm -f /var/cache/nginx/.fss-proxy-install.lock /var/www/.index.tpl
+    - cd ${CMP_UI_DEPLOY_PATH}
+    - cp -rf ${CMP_UI_CATCH_PATH}dist.zip  ${CMP_UI_DEPLOY_PATH} # 拷贝dist.zip
+    - rm -rf dist_backup
+    - mv dist dist_backup
+    - unzip dist.zip
+    - chown -R 101:101 ${CMP_UI_DEPLOY_PATH}dist/
+    - docker restart cmp-ui
+
+  stage: deploy
+  only:
+    - /^release.*$/  # release分支进行构建
+  when: manual
+
+deployTest:
+  tags:
+    - cmp-web-cicd
+  script:
+    - scp ${CMP_UI_CATCH_PATH}dist.zip ${TEST_SERVICE_SSH_ACCOUNT}@${TEST_SERVICE_HOST}:${CMP_UI_DEPLOY_PATH} # 拷贝打包文件
+    - ssh ${TEST_SERVICE_SSH_ACCOUNT}@${TEST_SERVICE_HOST} "docker exec cmp-ui rm -f /var/cache/nginx/.fss-proxy-install.lock /var/www/.index.tpl && cd ${CMP_UI_DEPLOY_PATH} && rm -rf dist_backup && mv dist dist_backup && unzip dist.zip && chown -R 101:101 ${CMP_UI_DEPLOY_PATH}dist/ && docker restart cmp-ui"
+  stage: deploy
+  only:
+    - /^release.*$/  # release分支进行构建
+  when: manual
+
+
+release:
+  variables:
+    CI_DEPLOY_PLUGINS: "partial-sourcemap,docker,rsync-dist"
+    CI_X_DOCKER_MIRROR: 'true'
+    # CI_X_DIST_HOST_LIST: '192.168.0.67'
+    CI_X_DOCKER_PATCH_IMAGE: "harbor.tidu.io/tdio/fss-proxy-patches:1.1.x"
+  tags:
+    - cmp-web-cicd
+  script:
+    - yarn build
+    - echo $CI_COMMIT_SHA > $LAST_COMMIT_FILE
+    #- git deploy-bundle -h "$CI_CMP_UI_HOST_PROD"
+  stage: release
+  only:
+    - master
+    - tags
+  when: manual 

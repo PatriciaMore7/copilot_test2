@@ -1,18 +1,3 @@
-variables:
-  NODE_ENV: 'production'
-  NODE_OPTIONS: '--max_old_space_size=4096'
-  DEVTOOL: 'source-map'
-  CI_CHECK_ACL: 'Y'
-  CMP_RELEASE_MODE: 'SUPERVISE'
-  LAST_COMMIT_FILE: .commit_for_last_run
-  CI_BUILD_DEST: "dist"
-  CI_X_DOCKER_ARCHS: "linux/amd64,linux/arm64"
-  CI_X_DOCKER_BASE_IMAGE: "harbor.tidu.io/tdio/fss-proxy:1.1.x"
-  CI_X_DOCKER_HUB: "harbor.tidu.io"
-  CI_X_DOCKER_IMAGE_NAME: "cmp/cmp-ui"
-  CI_X_DOCKER_MIRROR_OPTS: '-r steamer-9/cmp/cmp-ui:%{tag} --registry hub.tiduyun.com:5000'
-  CI_X_DIST_DIR: '/data/cmp-ui'
-
 cache:
   paths:
     - node_modules/
